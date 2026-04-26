@@ -1,6 +1,12 @@
 [package]
 name = "notas_semanales"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+slint = "1.5.1"
+chrono = "0.4.37"
+dirs = "5.0.1"
+
+[build-dependencies]
+slint-build = "1.5.1"

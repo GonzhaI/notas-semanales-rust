@@ -1,0 +1,222 @@
+import { TextEdit, Button, ListView, CheckBox } from "std-widgets.slint";
+
+export global AppTheme {
+    // Colores base
+    in property <color> bg: #1e1e1e;
+    in property <color> panel: #252526;
+    in property <color> hover: #37373d;
+    in property <color> text: #d4d4d4;
+    in property <color> text-muted: #9da3af;
+    in property <color> accent1: #569cd6;
+    in property <color> accent2: #4ec9b0;
+    in property <color> ok: #6a9955;
+    in property <color> border: #2d2d30;
+
+    // Tipografías (ligaduras dependen de la fuente instalada)
+    in property <string> font-ui: "Segoe UI Variable";
+    in property <string> font-mono: "Cascadia Code";
+}
+
+export struct LineaNota {
+    texto_crudo: string,
+    texto_limpio: string,
+    es_activa: bool,
+    tipo_bloque: string,
+}
+
+export component AppWindow inherits Window {
+    width: 1000px;
+    height: 700px;
+    title: "Notas Semanales Bóveda";
+    background: AppTheme.bg;
+    default-font-family: AppTheme.font-ui;
+
+    in property <[string]> lista-notas;
+    in property <bool> puede-crear-nota: false;
+    in property <[LineaNota]> lineas-documento;
+    in property <string> nota-activa: "";
+
+    callback nota-seleccionada(string);
+    callback crear-nota();
+    callback actualizar-linea(int, string);
+    callback cambiar-foco(int);
+    callback toggle-tarea(int, bool);
+    callback insertar-linea(int, string);
+    callback mover-foco(int);
+
+    HorizontalLayout {
+        // --- PANEL LATERAL IZQUIERDO ---
+        Rectangle {
+            width: 250px;
+            background: AppTheme.panel;
+
+            VerticalLayout {
+                padding: 15px;
+                spacing: 15px;
+
+                Text {
+                    text: "Bóveda";
+                    font-size: 18px;
+                    color: AppTheme.text;
+                    font-weight: 700;
+                }
+
+                Text {
+                    visible: root.nota-activa != "";
+                    text: "Seleccionada: " + root.nota-activa;
+                    font-size: 12px;
+                    color: AppTheme.text-muted;
+                    wrap: word-wrap;
+                }
+
+                Button {
+                    text: "+ Crear Nota Actual";
+                    height: 35px;
+                    enabled: root.puede-crear-nota;
+                    clicked => {
+                        root.crear-nota();
+                    }
+                }
+
+                ListView {
+                    for nota in lista-notas: Rectangle {
+                        height: 35px;
+                        border-radius: 5px;
+                        background: root.nota-activa == nota ? AppTheme.hover : (touch-nota.has-hover ? AppTheme.hover : transparent);
+
+                        touch-nota := TouchArea {
+                            clicked => {
+                                root.nota-seleccionada(nota);
+                            }
+                        }
+
+                        Text {
+                            text: nota;
+                            color: AppTheme.text;
+                            vertical-alignment: center;
+                            x: 10px;
+                            font-size: 14px;
+                            font-family: AppTheme.font-mono;
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- EDITOR PRINCIPAL (Live Preview) ---
+        Rectangle {
+            background: AppTheme.bg;
+
+            if root.nota-activa == "" : VerticalLayout {
+                alignment: center;
+                spacing: 10px;
+                padding: 40px;
+
+                Text {
+                    text: "Bienvenido";
+                    font-size: 28px;
+                    font-weight: 700;
+                    color: AppTheme.text;
+                }
+
+                Text {
+                    text: "Selecciona una nota semanal a la izquierda, o crea la de la semana cuando corresponda.";
+                    font-size: 14px;
+                    color: AppTheme.text-muted;
+                    wrap: word-wrap;
+                }
+            }
+
+            if root.nota-activa != "" : ListView {
+                width: 100%;
+                height: 100%;
+                padding: 30px;
+
+                for linea[indice] in lineas-documento: Rectangle {
+                    height: linea.tipo_bloque == "titulo1" ? 45px : linea.tipo_bloque == "titulo2" ? 35px : 30px;
+
+                    // MODO EDICIÓN
+                    if linea.es_activa: TextInput {
+                        width: 100%;
+                        height: 100%;
+                        color: AppTheme.text;
+                        text: linea.texto_crudo;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        font-family: AppTheme.font-mono;
+                        font-size: linea.tipo_bloque == "titulo1" ? 24px : linea.tipo_bloque == "titulo2" ? 20px : 16px;
+
+                        edited => { root.actualizar-linea(indice, self.text); }
+                        accepted => { root.insertar-linea(indice, self.text); }
+
+                        key-pressed(event) => {
+                            if (event.text == Key.UpArrow) {
+                                root.mover-foco(-1);
+                                accept
+                            } else if (event.text == Key.DownArrow) {
+                                root.mover-foco(1);
+                                accept
+                            } else {
+                                reject
+                            }
+                        }
+                    }
+
+                    // MODO LECTURA
+                    if !linea.es_activa: Rectangle {
+                        TouchArea { clicked => { root.cambiar-foco(indice); } }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            if linea.tipo_bloque == "titulo1": Text {
+                                text: linea.texto_limpio;
+                                font-size: 24px;
+                                font-weight: 700;
+                                color: AppTheme.accent1;
+                                vertical-alignment: center;
+                            }
+
+                            if linea.tipo_bloque == "titulo2": Text {
+                                text: linea.texto_limpio;
+                                font-size: 20px;
+                                font-weight: 600;
+                                color: AppTheme.accent2;
+                                vertical-alignment: center;
+                            }
+
+                            if linea.tipo_bloque == "tarea_pendiente": HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                CheckBox { checked: false; toggled => { root.toggle-tarea(indice, self.checked); } }
+                                Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                            }
+
+                            if linea.tipo_bloque == "tarea_completada": HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                CheckBox { checked: true; toggled => { root.toggle-tarea(indice, self.checked); } }
+                                Text { text: linea.texto_limpio; color: AppTheme.ok; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                            }
+
+                            if linea.tipo_bloque == "vinieta": HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                Rectangle { width: 6px; height: 6px; border-radius: 3px; background: AppTheme.text; y: 12px; }
+                                Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                            }
+
+                            if linea.tipo_bloque == "parrafo": Text {
+                                text: linea.texto_crudo;
+                                color: AppTheme.text;
+                                vertical-alignment: center;
+                                font-size: 16px;
+                                font-family: AppTheme.font-mono;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
