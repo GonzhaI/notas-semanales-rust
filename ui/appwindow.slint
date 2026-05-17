@@ -43,6 +43,7 @@ export component AppWindow inherits Window {
     callback toggle-tarea(int, bool);
     callback insertar-linea(int, string);
     callback mover-foco(int);
+    callback eliminar-linea(int);
 
     HorizontalLayout {
         // --- PANEL LATERAL IZQUIERDO ---
@@ -127,91 +128,97 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if root.nota-activa != "" : ListView {
-                width: 100%;
-                height: 100%;
-                padding: 30px;
+            if root.nota-activa != "" : VerticalLayout {
+                padding-left: 30px;
+                padding-right: 30px;
+                padding-top: 15px;
+                ListView {
+                    for linea[indice] in lineas-documento: Rectangle {
+                        height: linea.tipo_bloque == "titulo1" ? 45px : linea.tipo_bloque == "titulo2" ? 35px : 30px;
 
-                for linea[indice] in lineas-documento: Rectangle {
-                    height: linea.tipo_bloque == "titulo1" ? 45px : linea.tipo_bloque == "titulo2" ? 35px : 30px;
+                        // MODO EDICIÓN
+                        if linea.es_activa: TextInput {
+                            width: 100%;
+                            height: 100%;
+                            color: AppTheme.text;
+                            text: linea.texto_crudo;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                            font-family: AppTheme.font-mono;
+                            font-size: linea.tipo_bloque == "titulo1" ? 24px : linea.tipo_bloque == "titulo2" ? 20px : 16px;
 
-                    // MODO EDICIÓN
-                    if linea.es_activa: TextInput {
-                        width: 100%;
-                        height: 100%;
-                        color: AppTheme.text;
-                        text: linea.texto_crudo;
-                        horizontal-alignment: left;
-                        vertical-alignment: center;
-                        font-family: AppTheme.font-mono;
-                        font-size: linea.tipo_bloque == "titulo1" ? 24px : linea.tipo_bloque == "titulo2" ? 20px : 16px;
+                            init => { self.focus(); }
 
-                        edited => { root.actualizar-linea(indice, self.text); }
-                        accepted => { root.insertar-linea(indice, self.text); }
+                            edited => { root.actualizar-linea(indice, self.text); }
+                            accepted => { root.insertar-linea(indice, self.text); }
 
-                        key-pressed(event) => {
-                            if (event.text == Key.UpArrow) {
-                                root.mover-foco(-1);
-                                accept
-                            } else if (event.text == Key.DownArrow) {
-                                root.mover-foco(1);
-                                accept
-                            } else {
-                                reject
+                            key-pressed(event) => {
+                                if (event.text == Key.UpArrow) {
+                                    root.mover-foco(-1);
+                                    accept
+                                } else if (event.text == Key.DownArrow) {
+                                    root.mover-foco(1);
+                                    accept
+                                } else if (event.text == Key.Backspace && self.text == "") {
+                                    root.eliminar-linea(indice);
+                                    accept
+                                } else {
+                                    reject
+                                }
                             }
                         }
-                    }
 
-                    // MODO LECTURA
-                    if !linea.es_activa: Rectangle {
-                        TouchArea { clicked => { root.cambiar-foco(indice); } }
+                        // MODO LECTURA
+                        if !linea.es_activa: Rectangle {
+                            TouchArea { clicked => { root.cambiar-foco(indice); } }
 
-                        HorizontalLayout {
-                            alignment: start;
-
-                            if linea.tipo_bloque == "titulo1": Text {
-                                text: linea.texto_limpio;
-                                font-size: 24px;
-                                font-weight: 700;
-                                color: AppTheme.accent1;
-                                vertical-alignment: center;
-                            }
-
-                            if linea.tipo_bloque == "titulo2": Text {
-                                text: linea.texto_limpio;
-                                font-size: 20px;
-                                font-weight: 600;
-                                color: AppTheme.accent2;
-                                vertical-alignment: center;
-                            }
-
-                            if linea.tipo_bloque == "tarea_pendiente": HorizontalLayout {
-                                spacing: 10px;
+                            HorizontalLayout {
                                 alignment: start;
-                                CheckBox { checked: false; toggled => { root.toggle-tarea(indice, self.checked); } }
-                                Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
-                            }
 
-                            if linea.tipo_bloque == "tarea_completada": HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                CheckBox { checked: true; toggled => { root.toggle-tarea(indice, self.checked); } }
-                                Text { text: linea.texto_limpio; color: AppTheme.ok; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
-                            }
+                                if linea.tipo_bloque == "titulo1": Text {
+                                    text: linea.texto_limpio;
+                                    font-size: 24px;
+                                    font-weight: 700;
+                                    color: AppTheme.accent1;
+                                    vertical-alignment: center;
+                                }
 
-                            if linea.tipo_bloque == "vinieta": HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                Rectangle { width: 6px; height: 6px; border-radius: 3px; background: AppTheme.text; y: 12px; }
-                                Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
-                            }
+                                if linea.tipo_bloque == "titulo2": Text {
+                                    text: linea.texto_limpio;
+                                    font-size: 20px;
+                                    font-weight: 600;
+                                    color: AppTheme.accent2;
+                                    vertical-alignment: center;
+                                }
 
-                            if linea.tipo_bloque == "parrafo": Text {
-                                text: linea.texto_crudo;
-                                color: AppTheme.text;
-                                vertical-alignment: center;
-                                font-size: 16px;
-                                font-family: AppTheme.font-mono;
+                                if linea.tipo_bloque == "tarea_pendiente": HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    CheckBox { checked: false; toggled => { root.toggle-tarea(indice, self.checked); } }
+                                    Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                                }
+
+                                if linea.tipo_bloque == "tarea_completada": HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    CheckBox { checked: true; toggled => { root.toggle-tarea(indice, self.checked); } }
+                                    Text { text: linea.texto_limpio; color: AppTheme.ok; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                                }
+
+                                if linea.tipo_bloque == "vinieta": HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    Rectangle { width: 6px; height: 6px; border-radius: 3px; background: AppTheme.text; y: 12px; }
+                                    Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                                }
+
+                                if linea.tipo_bloque == "parrafo": Text {
+                                    text: linea.texto_crudo;
+                                    color: AppTheme.text;
+                                    vertical-alignment: center;
+                                    font-size: 16px;
+                                    font-family: AppTheme.font-mono;
+                                }
                             }
                         }
                     }

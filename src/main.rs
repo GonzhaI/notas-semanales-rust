@@ -13,9 +13,10 @@ struct EstadoEditor {
 }
 
 fn obtener_directorio_base() -> PathBuf {
-    let mut ruta = dirs::document_dir().expect("No se encontró Documentos");
-    ruta.push("Boveda_Semanales");
-    ruta
+    dirs::document_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+        .expect("No se encontró directorio de usuario")
+        .join("Boveda_Semanales")
 }
 
 fn obtener_nombre_semana_actual() -> String {
@@ -269,5 +270,75 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    let ui_handle = ui.as_weak();
+    let est_c = estado.clone();
+    ui.on_eliminar_linea(move |idx| {
+        let mut est = est_c.borrow_mut();
+        let i = idx as usize;
+        if i == 0 || i >= est.lineas.len() { return; }
+        est.lineas.remove(i);
+        est.linea_activa = i - 1;
+        guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
+        }
+    });
+
     ui.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsear_nombre_valido() {
+        assert_eq!(parsear_año_semana("2025-W20.md"), Some((2025, 20)));
+        assert_eq!(parsear_año_semana("2024-W01.md"), Some((2024, 1)));
+        assert_eq!(parsear_año_semana("2026-W52.md"), Some((2026, 52)));
+    }
+
+    #[test]
+    fn parsear_nombre_invalido() {
+        assert_eq!(parsear_año_semana("nota.md"), None);
+        assert_eq!(parsear_año_semana("2025.md"), None);
+        assert_eq!(parsear_año_semana("2025-20.md"), None);
+        assert_eq!(parsear_año_semana(""), None);
+    }
+
+    #[test]
+    fn primera_nota_siempre_permitida() {
+        assert!(puede_crear_semana_actual(&[], "2025-W20.md"));
+    }
+
+    #[test]
+    fn no_puede_duplicar_semana_actual() {
+        let notas = vec!["2025-W20.md".to_string()];
+        assert!(!puede_crear_semana_actual(&notas, "2025-W20.md"));
+    }
+
+    #[test]
+    fn puede_crear_semana_nueva() {
+        let notas = vec!["2025-W19.md".to_string()];
+        assert!(puede_crear_semana_actual(&notas, "2025-W20.md"));
+    }
+
+    #[test]
+    fn semana_actual_bloquea_aunque_haya_otras() {
+        let notas = vec!["2025-W20.md".to_string(), "2025-W19.md".to_string()];
+        assert!(!puede_crear_semana_actual(&notas, "2025-W20.md"));
+    }
+
+    #[test]
+    fn tipos_markdown_correctos() {
+        assert_eq!(determinar_tipo("# Título"), "titulo1");
+        assert_eq!(determinar_tipo("## Subtítulo"), "titulo2");
+        assert_eq!(determinar_tipo("- [ ] Tarea"), "tarea_pendiente");
+        assert_eq!(determinar_tipo("- [x] Hecho"), "tarea_completada");
+        assert_eq!(determinar_tipo("- [X] Hecho"), "tarea_completada");
+        assert_eq!(determinar_tipo("- Viñeta"), "vinieta");
+        assert_eq!(determinar_tipo("* Viñeta"), "vinieta");
+        assert_eq!(determinar_tipo("Párrafo normal"), "parrafo");
+        assert_eq!(determinar_tipo(""), "parrafo");
+    }
 }
