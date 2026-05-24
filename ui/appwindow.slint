@@ -108,7 +108,7 @@ export component AppWindow inherits Window {
         Rectangle {
             background: AppTheme.bg;
 
-            if root.nota-activa == "" : VerticalLayout {
+            if root.nota-activa == "": VerticalLayout {
                 alignment: center;
                 spacing: 10px;
                 padding: 40px;
@@ -128,10 +128,11 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if root.nota-activa != "" : VerticalLayout {
+            if root.nota-activa != "": VerticalLayout {
                 padding-left: 30px;
                 padding-right: 30px;
                 padding-top: 15px;
+                padding-bottom: 15px;
                 ListView {
                     for linea[indice] in lineas-documento: Rectangle {
                         height: linea.tipo_bloque == "titulo1" ? 45px : linea.tipo_bloque == "titulo2" ? 35px : 30px;
@@ -147,10 +148,16 @@ export component AppWindow inherits Window {
                             font-family: AppTheme.font-mono;
                             font-size: linea.tipo_bloque == "titulo1" ? 24px : linea.tipo_bloque == "titulo2" ? 20px : 16px;
 
-                            init => { self.focus(); }
+                            init => {
+                                self.focus();
+                            }
 
-                            edited => { root.actualizar-linea(indice, self.text); }
-                            accepted => { root.insertar-linea(indice, self.text); }
+                            edited => {
+                                root.actualizar-linea(indice, self.text);
+                            }
+                            accepted => {
+                                root.insertar-linea(indice, self.text);
+                            }
 
                             key-pressed(event) => {
                                 if (event.text == Key.UpArrow) {
@@ -170,7 +177,11 @@ export component AppWindow inherits Window {
 
                         // MODO LECTURA
                         if !linea.es_activa: Rectangle {
-                            TouchArea { clicked => { root.cambiar-foco(indice); } }
+                            TouchArea {
+                                clicked => {
+                                    root.cambiar-foco(indice);
+                                }
+                            }
 
                             HorizontalLayout {
                                 alignment: start;
@@ -194,22 +205,59 @@ export component AppWindow inherits Window {
                                 if linea.tipo_bloque == "tarea_pendiente": HorizontalLayout {
                                     spacing: 10px;
                                     alignment: start;
-                                    CheckBox { checked: false; toggled => { root.toggle-tarea(indice, self.checked); } }
-                                    Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                                    CheckBox {
+                                        checked: false;
+                                        toggled => {
+                                            root.toggle-tarea(indice, self.checked);
+                                        }
+                                    }
+
+                                    Text {
+                                        text: linea.texto_limpio;
+                                        color: AppTheme.text;
+                                        vertical-alignment: center;
+                                        font-size: 16px;
+                                        font-family: AppTheme.font-mono;
+                                    }
                                 }
 
                                 if linea.tipo_bloque == "tarea_completada": HorizontalLayout {
                                     spacing: 10px;
                                     alignment: start;
-                                    CheckBox { checked: true; toggled => { root.toggle-tarea(indice, self.checked); } }
-                                    Text { text: linea.texto_limpio; color: AppTheme.ok; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                                    CheckBox {
+                                        checked: true;
+                                        toggled => {
+                                            root.toggle-tarea(indice, self.checked);
+                                        }
+                                    }
+
+                                    Text {
+                                        text: linea.texto_limpio;
+                                        color: AppTheme.ok;
+                                        vertical-alignment: center;
+                                        font-size: 16px;
+                                        font-family: AppTheme.font-mono;
+                                    }
                                 }
 
                                 if linea.tipo_bloque == "vinieta": HorizontalLayout {
                                     spacing: 10px;
                                     alignment: start;
-                                    Rectangle { width: 6px; height: 6px; border-radius: 3px; background: AppTheme.text; y: 12px; }
-                                    Text { text: linea.texto_limpio; color: AppTheme.text; vertical-alignment: center; font-size: 16px; font-family: AppTheme.font-mono; }
+                                    Rectangle {
+                                        width: 6px;
+                                        height: 6px;
+                                        border-radius: 3px;
+                                        background: AppTheme.text;
+                                        y: 12px;
+                                    }
+
+                                    Text {
+                                        text: linea.texto_limpio;
+                                        color: AppTheme.text;
+                                        vertical-alignment: center;
+                                        font-size: 16px;
+                                        font-family: AppTheme.font-mono;
+                                    }
                                 }
 
                                 if linea.tipo_bloque == "parrafo": Text {

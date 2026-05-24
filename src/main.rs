@@ -41,10 +41,7 @@ fn puede_crear_semana_actual(notas: &[String], nombre_semana_actual: &str) -> bo
         None => return true,
     };
 
-    let ultima = notas
-        .iter()
-        .filter_map(|n| parsear_año_semana(n))
-        .max();
+    let ultima = notas.iter().filter_map(|n| parsear_año_semana(n)).max();
 
     match ultima {
         None => true,
@@ -74,11 +71,18 @@ fn leer_lista_notas(directorio_base: &Path) -> Vec<String> {
 }
 
 fn guardar_archivo_fisico(nombre_archivo: &str, lineas: &[String]) {
-    if nombre_archivo.is_empty() { return; }
+    if nombre_archivo.is_empty() {
+        return;
+    }
     let año = nombre_archivo.split('-').next().unwrap_or("");
     let mut ruta = obtener_directorio_base();
     ruta.push(año);
-    if !ruta.exists() { fs::create_dir_all(&ruta).unwrap(); }
+    if !ruta.exists() {
+        if let Err(e) = fs::create_dir_all(&ruta) {
+            eprintln!("Error creando directorio {:?}: {}", ruta, e);
+            return;
+        }
+    }
     ruta.push(nombre_archivo);
     fs::write(ruta, lineas.join("\n")).ok();
 }
@@ -88,16 +92,25 @@ fn cargar_archivo_fisico(nombre_archivo: &str) -> Vec<String> {
     let mut ruta = obtener_directorio_base();
     ruta.push(año);
     ruta.push(nombre_archivo);
-    fs::read_to_string(ruta).map(|c| c.lines().map(|s| s.to_string()).collect()).unwrap_or_default()
+    fs::read_to_string(ruta)
+        .map(|c| c.lines().map(|s| s.to_string()).collect())
+        .unwrap_or_default()
 }
 
 fn determinar_tipo(texto: &str) -> String {
-    if texto.starts_with("# ") { "titulo1".to_string() }
-    else if texto.starts_with("## ") { "titulo2".to_string() }
-    else if texto.starts_with("- [ ] ") { "tarea_pendiente".to_string() }
-    else if texto.starts_with("- [x] ") || texto.starts_with("- [X] ") { "tarea_completada".to_string() }
-    else if texto.starts_with("- ") || texto.starts_with("* ") { "vinieta".to_string() }
-    else { "parrafo".to_string() }
+    if texto.starts_with("# ") {
+        "titulo1".to_string()
+    } else if texto.starts_with("## ") {
+        "titulo2".to_string()
+    } else if texto.starts_with("- [ ] ") {
+        "tarea_pendiente".to_string()
+    } else if texto.starts_with("- [x] ") || texto.starts_with("- [X] ") {
+        "tarea_completada".to_string()
+    } else if texto.starts_with("- ") || texto.starts_with("* ") {
+        "vinieta".to_string()
+    } else {
+        "parrafo".to_string()
+    }
 }
 
 fn reconstruir_modelo(estado: &EstadoEditor) -> Rc<VecModel<LineaNota>> {
@@ -108,8 +121,10 @@ fn reconstruir_modelo(estado: &EstadoEditor) -> Rc<VecModel<LineaNota>> {
             "titulo1" => linea_str.replacen("# ", "", 1),
             "titulo2" => linea_str.replacen("## ", "", 1),
             "tarea_pendiente" => linea_str.replacen("- [ ] ", "", 1),
-            "tarea_completada" => linea_str.replacen("- [x] ", "", 1).replacen("- [X] ", "", 1),
-            "vinieta" => linea_str.replacen("- ", "", 1).replacen("* ", "", 1),
+            "tarea_completada" => linea_str
+                .replacen("- [x] ", "", 1)
+                .replacen("- [X] ", "", 1),
+            "vinieta" => linea_str[2..].to_string(),
             _ => linea_str.to_string(),
         };
         modelo.push(LineaNota {
@@ -124,7 +139,11 @@ fn reconstruir_modelo(estado: &EstadoEditor) -> Rc<VecModel<LineaNota>> {
 
 fn main() -> Result<(), slint::PlatformError> {
     let directorio_base = obtener_directorio_base();
-    if !directorio_base.exists() { fs::create_dir_all(&directorio_base).unwrap(); }
+    if !directorio_base.exists() {
+        if let Err(e) = fs::create_dir_all(&directorio_base) {
+            eprintln!("Error creando directorio base {:?}: {}", directorio_base, e);
+        }
+    }
 
     let ui = AppWindow::new()?;
     let estado = Rc::new(RefCell::new(EstadoEditor {
@@ -139,7 +158,12 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_nota_activa(SharedString::from(""));
     ui.set_lineas_documento(ModelRc::from(Rc::new(VecModel::<LineaNota>::default())));
 
-    let modelo_nombres = Rc::new(VecModel::from(lista_archivos.iter().map(|s| SharedString::from(s)).collect::<Vec<_>>()));
+    let modelo_nombres = Rc::new(VecModel::from(
+        lista_archivos
+            .iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    ));
     ui.set_lista_notas(ModelRc::from(modelo_nombres.clone()));
 
     // --- CALLBACKS ---
@@ -160,10 +184,16 @@ fn main() -> Result<(), slint::PlatformError> {
     let est_c = estado.clone();
     ui.on_crear_nota(move || {
         let n = obtener_nombre_semana_actual();
-        let p = vec![format!("# Planificación / {}", n.replace(".md", "")), "## Tareas".into(), "- [ ] ".into()];
+        let p = vec![
+            format!("# Planificación / {}", n.replace(".md", "")),
+            "## Tareas".into(),
+            "- [ ] ".into(),
+        ];
         guardar_archivo_fisico(&n, &p);
         let mut est = est_c.borrow_mut();
-        est.archivo_activo = n.clone(); est.lineas = p; est.linea_activa = 0;
+        est.archivo_activo = n.clone();
+        est.lineas = p;
+        est.linea_activa = 2;
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_nota_activa(SharedString::from(&n));
             ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
@@ -187,7 +217,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_toggle_tarea(move |idx, marcada| {
         let mut est = est_c.borrow_mut();
         let i = idx as usize;
-        if i >= est.lineas.len() { return; }
+        if i >= est.lineas.len() {
+            return;
+        }
 
         let linea = est.lineas[i].clone();
         let actual = linea.trim_end_matches('\r');
@@ -202,9 +234,9 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         } else {
             if actual.starts_with("- [x] ") || actual.starts_with("- [X] ") {
-                actual.replacen("- [x] ", "- [ ] ", 1).replacen("- [X] ", "- [ ] ", 1)
-            } else if actual.starts_with("- [ ] ") {
-                actual.to_string()
+                actual
+                    .replacen("- [x] ", "- [ ] ", 1)
+                    .replacen("- [X] ", "- [ ] ", 1)
             } else {
                 actual.to_string()
             }
@@ -224,7 +256,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_cambiar_foco(move |idx| {
         let mut est = est_c.borrow_mut();
         est.linea_activa = idx as usize;
-        if let Some(ui) = ui_handle.upgrade() { ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est))); }
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
+        }
     });
 
     // Enter: inserta una nueva línea debajo y mueve el foco.
@@ -232,13 +266,28 @@ fn main() -> Result<(), slint::PlatformError> {
     let est_c = estado.clone();
     ui.on_insertar_linea(move |idx, txt| {
         let mut est = est_c.borrow_mut();
-        if est.archivo_activo.is_empty() { return; }
+        if est.archivo_activo.is_empty() {
+            return;
+        }
 
         let i = idx as usize;
-        if i >= est.lineas.len() { return; }
+        if i >= est.lineas.len() {
+            return;
+        }
 
         est.lineas[i] = txt.to_string();
-        est.lineas.insert(i + 1, String::new());
+        let nueva = match determinar_tipo(&est.lineas[i]).as_str() {
+            "tarea_pendiente" | "tarea_completada" => "- [ ] ".to_string(),
+            "vinieta" => {
+                if est.lineas[i].starts_with("* ") {
+                    "* ".to_string()
+                } else {
+                    "- ".to_string()
+                }
+            }
+            _ => String::new(),
+        };
+        est.lineas.insert(i + 1, nueva);
         est.linea_activa = i + 1;
         guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
 
@@ -252,10 +301,18 @@ fn main() -> Result<(), slint::PlatformError> {
     let est_c = estado.clone();
     ui.on_mover_foco(move |delta| {
         let mut est = est_c.borrow_mut();
-        if est.archivo_activo.is_empty() { return; }
-        if est.lineas.is_empty() { return; }
+        if est.archivo_activo.is_empty() {
+            return;
+        }
+        if est.lineas.is_empty() {
+            return;
+        }
 
-        let cur = if est.linea_activa >= est.lineas.len() { 0 } else { est.linea_activa };
+        let cur = if est.linea_activa >= est.lineas.len() {
+            0
+        } else {
+            est.linea_activa
+        };
         let next = if delta < 0 {
             cur.saturating_sub(1)
         } else if delta > 0 {
@@ -275,7 +332,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_eliminar_linea(move |idx| {
         let mut est = est_c.borrow_mut();
         let i = idx as usize;
-        if i == 0 || i >= est.lineas.len() { return; }
+        if i == 0 || i >= est.lineas.len() {
+            return;
+        }
         est.lineas.remove(i);
         est.linea_activa = i - 1;
         guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
@@ -290,6 +349,7 @@ fn main() -> Result<(), slint::PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::Model;
 
     #[test]
     fn parsear_nombre_valido() {
@@ -327,6 +387,27 @@ mod tests {
     fn semana_actual_bloquea_aunque_haya_otras() {
         let notas = vec!["2025-W20.md".to_string(), "2025-W19.md".to_string()];
         assert!(!puede_crear_semana_actual(&notas, "2025-W20.md"));
+    }
+
+    #[test]
+    fn vinieta_limpia_sin_corromper_cuerpo() {
+        let estado = EstadoEditor {
+            archivo_activo: String::new(),
+            lineas: vec![
+                "* Texto con - guion".to_string(),
+                "- Texto con * asterisco".to_string(),
+            ],
+            linea_activa: 999,
+        };
+        let modelo = reconstruir_modelo(&estado);
+        assert_eq!(
+            modelo.row_data(0).unwrap().texto_limpio.as_str(),
+            "Texto con - guion"
+        );
+        assert_eq!(
+            modelo.row_data(1).unwrap().texto_limpio.as_str(),
+            "Texto con * asterisco"
+        );
     }
 
     #[test]
