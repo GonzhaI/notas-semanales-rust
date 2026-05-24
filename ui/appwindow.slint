@@ -29,6 +29,26 @@ export struct EntradaNota {
     resumen: string,
 }
 
+export struct DiaCal {
+    numero: int,
+    es-mes: bool,
+    es-hoy: bool,
+}
+
+export struct FilaCal {
+    num-semana: int,
+    anio: int,
+    es-activa: bool,
+    tiene-nota: bool,
+    lun: DiaCal,
+    mar: DiaCal,
+    mie: DiaCal,
+    jue: DiaCal,
+    vie: DiaCal,
+    sab: DiaCal,
+    dom: DiaCal,
+}
+
 export component AppWindow inherits Window {
     width: 1000px;
     height: 700px;
@@ -54,6 +74,11 @@ export component AppWindow inherits Window {
     callback eliminar-nota(string);
     callback exportar-nota();
     callback buscar(string);
+    callback mes-anterior();
+    callback mes-siguiente();
+    callback ir-a-semana(int, int);
+    in property <[FilaCal]> semanas-cal;
+    in-out property <string> mes-anio-cal: "";
 
     in-out property <bool> tema-claro: false;
     in-out property <string> texto-busqueda: "";
@@ -238,6 +263,134 @@ export component AppWindow inherits Window {
                                     fill: transparent;
                                     commands: "M 1 1 L 9 9 M 9 1 L 1 9";
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // --- CALENDARIO ---
+                Rectangle {
+                    height: 185px;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: AppTheme.border;
+                    background: AppTheme.bg;
+                    clip: true;
+
+                    VerticalLayout {
+                        padding: 5px;
+                        spacing: 2px;
+
+                        HorizontalLayout {
+                            height: 22px;
+                            alignment: space-between;
+
+                            Rectangle {
+                                width: 22px; height: 22px; border-radius: 4px;
+                                background: cal-prev.has-hover ? AppTheme.hover : transparent;
+                                cal-prev := TouchArea { clicked => { root.mes-anterior(); } }
+                                Path {
+                                    width: 6px; height: 10px; x: 8px; y: 6px;
+                                    stroke: AppTheme.text-muted; stroke-width: 1.5px; fill: transparent;
+                                    commands: "M 6 0 L 0 5 L 6 10";
+                                }
+                            }
+
+                            Text {
+                                text: root.mes-anio-cal;
+                                font-size: 12px; font-weight: 600;
+                                color: AppTheme.text;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                width: 22px; height: 22px; border-radius: 4px;
+                                background: cal-next.has-hover ? AppTheme.hover : transparent;
+                                cal-next := TouchArea { clicked => { root.mes-siguiente(); } }
+                                Path {
+                                    width: 6px; height: 10px; x: 8px; y: 6px;
+                                    stroke: AppTheme.text-muted; stroke-width: 1.5px; fill: transparent;
+                                    commands: "M 0 0 L 6 5 L 0 10";
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            height: 16px; spacing: 0px;
+                            Rectangle { width: 24px; }
+                            Text { horizontal-stretch: 1; text: "L"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: "M"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: "X"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: "J"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: "V"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: "S"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: "D"; font-size: 10px; color: AppTheme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+
+                        for fila in root.semanas-cal: HorizontalLayout {
+                            height: 20px; spacing: 0px;
+
+                            Rectangle {
+                                width: 24px; height: 20px; border-radius: 3px;
+                                background: cal-wk.has-hover ? AppTheme.hover : fila.es-activa ? AppTheme.accent1 : transparent;
+                                cal-wk := TouchArea {
+                                    clicked => { root.ir-a-semana(fila.num-semana, fila.anio); }
+                                }
+                                Text {
+                                    text: "\{fila.num-semana}"; font-size: 9px;
+                                    color: fila.es-activa ? AppTheme.bg : fila.tiene-nota ? AppTheme.accent1 : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.lun.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.lun.numero}"; font-size: 11px;
+                                    color: fila.lun.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.lun.es-mes) ? AppTheme.accent2 : fila.lun.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.mar.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.mar.numero}"; font-size: 11px;
+                                    color: fila.mar.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.mar.es-mes) ? AppTheme.accent2 : fila.mar.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.mie.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.mie.numero}"; font-size: 11px;
+                                    color: fila.mie.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.mie.es-mes) ? AppTheme.accent2 : fila.mie.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.jue.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.jue.numero}"; font-size: 11px;
+                                    color: fila.jue.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.jue.es-mes) ? AppTheme.accent2 : fila.jue.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.vie.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.vie.numero}"; font-size: 11px;
+                                    color: fila.vie.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.vie.es-mes) ? AppTheme.accent2 : fila.vie.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.sab.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.sab.numero}"; font-size: 11px;
+                                    color: fila.sab.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.sab.es-mes) ? AppTheme.accent2 : fila.sab.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; height: 20px; border-radius: 3px;
+                                background: fila.dom.es-hoy ? AppTheme.accent1 : transparent;
+                                Text { text: "\{fila.dom.numero}"; font-size: 11px;
+                                    color: fila.dom.es-hoy ? AppTheme.bg : (fila.tiene-nota && fila.dom.es-mes) ? AppTheme.accent2 : fila.dom.es-mes ? AppTheme.text : AppTheme.text-muted;
+                                    horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }
                     }

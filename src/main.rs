@@ -1,6 +1,6 @@
 slint::include_modules!();
 use arboard::Clipboard;
-use chrono::{Datelike, Local};
+use chrono::{Datelike, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use slint::{Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
@@ -276,6 +276,82 @@ fn reconstruir_modelo(estado: &EstadoEditor) -> Rc<VecModel<LineaNota>> {
     modelo
 }
 
+fn ultimo_dia_mes(anio: i32, mes: u32) -> NaiveDate {
+    let (a, m) = if mes == 12 {
+        (anio + 1, 1u32)
+    } else {
+        (anio, mes + 1)
+    };
+    NaiveDate::from_ymd_opt(a, m, 1).unwrap() - chrono::Duration::days(1)
+}
+
+fn nombre_mes_anio(mes: u32, anio: i32) -> String {
+    let nombre = match mes {
+        1 => "Enero",
+        2 => "Febrero",
+        3 => "Marzo",
+        4 => "Abril",
+        5 => "Mayo",
+        6 => "Junio",
+        7 => "Julio",
+        8 => "Agosto",
+        9 => "Septiembre",
+        10 => "Octubre",
+        11 => "Noviembre",
+        12 => "Diciembre",
+        _ => "",
+    };
+    format!("{} {}", nombre, anio)
+}
+
+fn construir_semanas_cal(anio: i32, mes: u32, notas: &[String], nota_activa: &str) -> Vec<FilaCal> {
+    let hoy = Local::now().date_naive();
+    let primer_dia = NaiveDate::from_ymd_opt(anio, mes, 1).unwrap();
+    let ultimo_dia = ultimo_dia_mes(anio, mes);
+    let lunes_inicio =
+        primer_dia - chrono::Duration::days(primer_dia.weekday().num_days_from_monday() as i64);
+    let domingo_fin =
+        ultimo_dia + chrono::Duration::days(6 - ultimo_dia.weekday().num_days_from_monday() as i64);
+
+    let mut semanas = Vec::new();
+    let mut lunes = lunes_inicio;
+
+    while lunes <= domingo_fin {
+        let iso = lunes.iso_week();
+        let num_semana = iso.week() as i32;
+        let anio_semana = iso.year();
+        let nombre_nota = format!("{}-W{:02}.md", anio_semana, num_semana);
+        let tiene_nota = notas.contains(&nombre_nota);
+
+        let make_dia = |offset: i64| -> DiaCal {
+            let d = lunes + chrono::Duration::days(offset);
+            DiaCal {
+                numero: d.day() as i32,
+                es_mes: d.month() == mes && d.year() == anio,
+                es_hoy: d == hoy,
+            }
+        };
+
+        semanas.push(FilaCal {
+            num_semana,
+            anio: anio_semana,
+            es_activa: nota_activa == nombre_nota,
+            tiene_nota,
+            lun: make_dia(0),
+            mar: make_dia(1),
+            mie: make_dia(2),
+            jue: make_dia(3),
+            vie: make_dia(4),
+            sab: make_dia(5),
+            dom: make_dia(6),
+        });
+
+        lunes += chrono::Duration::days(7);
+    }
+
+    semanas
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let directorio_base = obtener_directorio_base();
     if !directorio_base.exists() {
@@ -338,6 +414,32 @@ fn main() -> Result<(), slint::PlatformError> {
         );
     });
 
+    let ahora = Local::now();
+    let cal_estado: Rc<RefCell<(i32, u32, String)>> =
+        Rc::new(RefCell::new((ahora.year(), ahora.month(), String::new())));
+
+    let modelo_cal = Rc::new(VecModel::<FilaCal>::default());
+    ui.set_semanas_cal(ModelRc::from(modelo_cal.clone()));
+
+    let dir_cal = directorio_base.clone();
+    let modelo_cal_ref = modelo_cal.clone();
+    let cal_estado_ref = cal_estado.clone();
+    let ui_handle_cal = ui.as_weak();
+    let refrescar_cal = Rc::new(move || {
+        let est = cal_estado_ref.borrow();
+        let anio = est.0;
+        let mes = est.1;
+        let nota_activa = est.2.clone();
+        drop(est);
+        let notas = leer_lista_notas(&dir_cal);
+        let semanas = construir_semanas_cal(anio, mes, &notas, &nota_activa);
+        modelo_cal_ref.set_vec(semanas);
+        if let Some(ui) = ui_handle_cal.upgrade() {
+            ui.set_mes_anio_cal(SharedString::from(nombre_mes_anio(mes, anio)));
+        }
+    });
+    refrescar_cal();
+
     // Lista completa para restaurar búsqueda
     let todas_las_notas: Rc<RefCell<Vec<EntradaNota>>> = Rc::new(RefCell::new(
         lista_archivos
@@ -381,6 +483,8 @@ fn main() -> Result<(), slint::PlatformError> {
     // --- CALLBACKS ---
     let ui_handle = ui.as_weak();
     let est_c = estado.clone();
+    let cal_estado_sel = cal_estado.clone();
+    let refrescar_cal_sel = refrescar_cal.clone();
     ui.on_nota_seleccionada(move |n| {
         let mut est = est_c.borrow_mut();
         est.archivo_activo = n.to_string();
@@ -389,15 +493,20 @@ fn main() -> Result<(), slint::PlatformError> {
         est.historial.clear();
         est.historial_pos = 0;
         est.guardar_snapshot();
+        cal_estado_sel.borrow_mut().2 = n.to_string();
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_nota_activa(n.clone());
             ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
         }
+        drop(est);
+        refrescar_cal_sel();
     });
 
     let modelo_nombres_crear = modelo_nombres.clone();
     let ui_handle = ui.as_weak();
     let est_c = estado.clone();
+    let cal_estado_crear = cal_estado.clone();
+    let refrescar_cal_crear = refrescar_cal.clone();
     ui.on_crear_nota(move || {
         let n = obtener_nombre_semana_actual();
         let p = cargar_template(&n);
@@ -421,6 +530,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 },
             );
         }
+        cal_estado_crear.borrow_mut().2 = n.clone();
+        drop(est);
+        refrescar_cal_crear();
     });
 
     let save_timer = Rc::new(RefCell::new(Timer::default()));
@@ -677,6 +789,8 @@ fn main() -> Result<(), slint::PlatformError> {
     let modelo_nombres_del = modelo_nombres.clone();
     let nombre_actual_del = nombre_actual.clone();
     let refrescar_nota_del = refrescar_resumen.clone();
+    let cal_estado_edel = cal_estado.clone();
+    let refrescar_cal_edel = refrescar_cal.clone();
     ui.on_eliminar_nota(move |nombre| {
         if eliminar_archivo_fisico(nombre.as_str()) {
             if let Some(pos) = (0..modelo_nombres_del.row_count())
@@ -690,6 +804,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 est.lineas.clear();
                 est.historial.clear();
                 est.historial_pos = 0;
+            }
+            drop(est);
+            if cal_estado_edel.borrow().2 == nombre.as_str() {
+                cal_estado_edel.borrow_mut().2 = String::new();
             }
             let lista_actualizada: Vec<String> = (0..modelo_nombres_del.row_count())
                 .filter_map(|j| modelo_nombres_del.row_data(j).map(|e| e.nombre.to_string()))
@@ -705,7 +823,69 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_puede_crear_nota(puede);
             }
             refrescar_nota_del();
+            refrescar_cal_edel();
         }
+    });
+
+    let cal_estado_prev = cal_estado.clone();
+    let refrescar_cal_prev = refrescar_cal.clone();
+    ui.on_mes_anterior(move || {
+        let mut est = cal_estado_prev.borrow_mut();
+        if est.1 == 1 {
+            est.1 = 12;
+            est.0 -= 1;
+        } else {
+            est.1 -= 1;
+        }
+        drop(est);
+        refrescar_cal_prev();
+    });
+
+    let cal_estado_next = cal_estado.clone();
+    let refrescar_cal_next = refrescar_cal.clone();
+    ui.on_mes_siguiente(move || {
+        let mut est = cal_estado_next.borrow_mut();
+        if est.1 == 12 {
+            est.1 = 1;
+            est.0 += 1;
+        } else {
+            est.1 += 1;
+        }
+        drop(est);
+        refrescar_cal_next();
+    });
+
+    let ui_handle = ui.as_weak();
+    let est_c = estado.clone();
+    let modelo_nombres_ir = modelo_nombres.clone();
+    let cal_estado_ir = cal_estado.clone();
+    let refrescar_cal_ir = refrescar_cal.clone();
+    ui.on_ir_a_semana(move |num_semana, anio| {
+        let nombre = format!("{}-W{:02}.md", anio, num_semana);
+        let existe = (0..modelo_nombres_ir.row_count()).any(|j| {
+            modelo_nombres_ir
+                .row_data(j)
+                .map(|e| e.nombre.as_str() == nombre.as_str())
+                .unwrap_or(false)
+        });
+        if !existe {
+            return;
+        }
+        let mut est = est_c.borrow_mut();
+        est.archivo_activo = nombre.clone();
+        est.lineas = cargar_archivo_fisico(&nombre);
+        est.linea_activa = 999;
+        est.historial.clear();
+        est.historial_pos = 0;
+        est.guardar_snapshot();
+        cal_estado_ir.borrow_mut().2 = nombre.clone();
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_nota_activa(SharedString::from(&nombre));
+            ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
+            ui.set_vista_resumen(false);
+        }
+        drop(est);
+        refrescar_cal_ir();
     });
 
     ui.run()
