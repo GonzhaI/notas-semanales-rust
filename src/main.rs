@@ -1,18 +1,92 @@
 slint::include_modules!();
+use arboard::Clipboard;
 use chrono::{Datelike, Local};
-use slint::{ModelRc, SharedString, VecModel};
+use serde::{Deserialize, Serialize};
+use slint::{Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    directorio_base: Option<String>,
+}
+
+fn ruta_config() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
+        .join("notas-semanales")
+        .join("config.toml")
+}
+
+fn cargar_config() -> Config {
+    let ruta = ruta_config();
+    fs::read_to_string(&ruta)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or(Config {
+            directorio_base: None,
+        })
+}
+
+#[allow(dead_code)]
+fn guardar_config(cfg: &Config) {
+    if let Ok(contenido) = toml::to_string(cfg) {
+        let ruta = ruta_config();
+        if let Some(padre) = ruta.parent() {
+            let _ = fs::create_dir_all(padre);
+        }
+        let _ = fs::write(ruta, contenido);
+    }
+}
+
+const MAX_HISTORIAL: usize = 50;
 
 struct EstadoEditor {
     archivo_activo: String,
     lineas: Vec<String>,
     linea_activa: usize,
+    historial: Vec<Vec<String>>,
+    historial_pos: usize,
+}
+
+impl EstadoEditor {
+    fn guardar_snapshot(&mut self) {
+        self.historial.truncate(self.historial_pos);
+        self.historial.push(self.lineas.clone());
+        if self.historial.len() > MAX_HISTORIAL {
+            self.historial.remove(0);
+        } else {
+            self.historial_pos += 1;
+        }
+    }
+
+    fn undo(&mut self) -> bool {
+        if self.historial_pos < 2 {
+            return false;
+        }
+        self.historial_pos -= 1;
+        self.lineas = self.historial[self.historial_pos - 1].clone();
+        true
+    }
+
+    fn redo(&mut self) -> bool {
+        if self.historial_pos >= self.historial.len() {
+            return false;
+        }
+        self.lineas = self.historial[self.historial_pos].clone();
+        self.historial_pos += 1;
+        true
+    }
 }
 
 fn obtener_directorio_base() -> PathBuf {
+    let cfg = cargar_config();
+    if let Some(dir) = cfg.directorio_base {
+        return PathBuf::from(dir);
+    }
     dirs::document_dir()
         .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
         .expect("No se encontró directorio de usuario")
@@ -47,6 +121,40 @@ fn puede_crear_semana_actual(notas: &[String], nombre_semana_actual: &str) -> bo
         None => true,
         Some(u) => u != actual,
     }
+}
+
+fn recolectar_tareas_pendientes(directorio_base: &Path) -> Vec<String> {
+    let nombre_actual = obtener_nombre_semana_actual();
+    let semana_actual = parsear_año_semana(&nombre_actual);
+    let mut resultado = Vec::new();
+    let notas = leer_lista_notas(directorio_base);
+    for nombre in &notas {
+        if let Some(semana_nota) = parsear_año_semana(nombre) {
+            if Some(semana_nota) >= semana_actual {
+                continue;
+            }
+        }
+        let lineas = cargar_archivo_fisico(nombre);
+        for linea in lineas {
+            if let Some(tarea) = linea.strip_prefix("- [ ] ") {
+                resultado.push(format!("[{}] {}", nombre.replace(".md", ""), tarea));
+            }
+        }
+    }
+    resultado
+}
+
+fn contar_tareas(nombre_archivo: &str) -> (u32, u32) {
+    let lineas = cargar_archivo_fisico(nombre_archivo);
+    let total = lineas
+        .iter()
+        .filter(|l| l.starts_with("- [ ] ") || l.starts_with("- [x] ") || l.starts_with("- [X] "))
+        .count() as u32;
+    let completadas = lineas
+        .iter()
+        .filter(|l| l.starts_with("- [x] ") || l.starts_with("- [X] "))
+        .count() as u32;
+    (completadas, total)
 }
 
 fn leer_lista_notas(directorio_base: &Path) -> Vec<String> {
@@ -87,6 +195,34 @@ fn guardar_archivo_fisico(nombre_archivo: &str, lineas: &[String]) {
     fs::write(ruta, lineas.join("\n")).ok();
 }
 
+fn eliminar_archivo_fisico(nombre_archivo: &str) -> bool {
+    if nombre_archivo.is_empty() {
+        return false;
+    }
+    let año = nombre_archivo.split('-').next().unwrap_or("");
+    let mut ruta = obtener_directorio_base();
+    ruta.push(año);
+    ruta.push(nombre_archivo);
+    fs::remove_file(ruta).is_ok()
+}
+
+fn cargar_template(nombre_semana: &str) -> Vec<String> {
+    let ruta_template = obtener_directorio_base().join("template.md");
+    if let Ok(contenido) = fs::read_to_string(&ruta_template) {
+        let semana = nombre_semana.replace(".md", "");
+        return contenido
+            .replace("{{semana}}", &semana)
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
+    }
+    vec![
+        format!("# Planificación / {}", nombre_semana.replace(".md", "")),
+        "## Tareas".into(),
+        "- [ ] ".into(),
+    ]
+}
+
 fn cargar_archivo_fisico(nombre_archivo: &str) -> Vec<String> {
     let año = nombre_archivo.split('-').next().unwrap_or("");
     let mut ruta = obtener_directorio_base();
@@ -98,10 +234,12 @@ fn cargar_archivo_fisico(nombre_archivo: &str) -> Vec<String> {
 }
 
 fn determinar_tipo(texto: &str) -> String {
-    if texto.starts_with("# ") {
-        "titulo1".to_string()
+    if texto.starts_with("### ") {
+        "titulo3".to_string()
     } else if texto.starts_with("## ") {
         "titulo2".to_string()
+    } else if texto.starts_with("# ") {
+        "titulo1".to_string()
     } else if texto.starts_with("- [ ] ") {
         "tarea_pendiente".to_string()
     } else if texto.starts_with("- [x] ") || texto.starts_with("- [X] ") {
@@ -118,8 +256,9 @@ fn reconstruir_modelo(estado: &EstadoEditor) -> Rc<VecModel<LineaNota>> {
     for (i, linea_str) in estado.lineas.iter().enumerate() {
         let tipo = determinar_tipo(linea_str);
         let texto_limpio = match tipo.as_str() {
-            "titulo1" => linea_str.replacen("# ", "", 1),
-            "titulo2" => linea_str.replacen("## ", "", 1),
+            "titulo1" => linea_str[2..].to_string(),
+            "titulo2" => linea_str[3..].to_string(),
+            "titulo3" => linea_str[4..].to_string(),
             "tarea_pendiente" => linea_str.replacen("- [ ] ", "", 1),
             "tarea_completada" => linea_str
                 .replacen("- [x] ", "", 1)
@@ -149,7 +288,9 @@ fn main() -> Result<(), slint::PlatformError> {
     let estado = Rc::new(RefCell::new(EstadoEditor {
         archivo_activo: String::new(),
         lineas: Vec::new(),
-        linea_activa: 999, // Ninguna activa al inicio
+        linea_activa: 999,
+        historial: Vec::new(),
+        historial_pos: 0,
     }));
 
     let nombre_actual = obtener_nombre_semana_actual();
@@ -161,10 +302,81 @@ fn main() -> Result<(), slint::PlatformError> {
     let modelo_nombres = Rc::new(VecModel::from(
         lista_archivos
             .iter()
-            .map(SharedString::from)
+            .map(|nombre| {
+                let (comp, total) = contar_tareas(nombre);
+                EntradaNota {
+                    nombre: SharedString::from(nombre),
+                    resumen: SharedString::from(if total == 0 {
+                        String::new()
+                    } else {
+                        format!("{}/{} tareas", comp, total)
+                    }),
+                }
+            })
             .collect::<Vec<_>>(),
     ));
     ui.set_lista_notas(ModelRc::from(modelo_nombres.clone()));
+
+    let tareas_pendientes = recolectar_tareas_pendientes(&directorio_base);
+    let modelo_resumen = Rc::new(VecModel::from(
+        tareas_pendientes
+            .iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    ));
+    ui.set_resumen_tareas(ModelRc::from(modelo_resumen.clone()));
+
+    // Closure que reconstruye el resumen leyendo del disco; se captura en los callbacks
+    let dir_resumen = directorio_base.clone();
+    let modelo_resumen_ref = modelo_resumen.clone();
+    let refrescar_resumen = Rc::new(move || {
+        modelo_resumen_ref.set_vec(
+            recolectar_tareas_pendientes(&dir_resumen)
+                .into_iter()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
+        );
+    });
+
+    // Lista completa para restaurar búsqueda
+    let todas_las_notas: Rc<RefCell<Vec<EntradaNota>>> = Rc::new(RefCell::new(
+        lista_archivos
+            .iter()
+            .map(|nombre| {
+                let (comp, total) = contar_tareas(nombre);
+                EntradaNota {
+                    nombre: SharedString::from(nombre),
+                    resumen: SharedString::from(if total == 0 {
+                        String::new()
+                    } else {
+                        format!("{}/{} tareas", comp, total)
+                    }),
+                }
+            })
+            .collect(),
+    ));
+
+    let modelo_busqueda = modelo_nombres.clone();
+    let todas_c = todas_las_notas.clone();
+    ui.on_buscar(move |query| {
+        let q = query.to_lowercase();
+        let todas = todas_c.borrow();
+        let filtradas: Vec<EntradaNota> = if q.is_empty() {
+            todas.clone()
+        } else {
+            todas
+                .iter()
+                .filter(|e| e.nombre.to_lowercase().contains(&q))
+                .cloned()
+                .collect()
+        };
+        while modelo_busqueda.row_count() > 0 {
+            modelo_busqueda.remove(0);
+        }
+        for entrada in filtradas {
+            modelo_busqueda.push(entrada);
+        }
+    });
 
     // --- CALLBACKS ---
     let ui_handle = ui.as_weak();
@@ -174,46 +386,71 @@ fn main() -> Result<(), slint::PlatformError> {
         est.archivo_activo = n.to_string();
         est.lineas = cargar_archivo_fisico(n.as_str());
         est.linea_activa = 999;
+        est.historial.clear();
+        est.historial_pos = 0;
+        est.guardar_snapshot();
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_nota_activa(n.clone());
             ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
         }
     });
 
+    let modelo_nombres_crear = modelo_nombres.clone();
     let ui_handle = ui.as_weak();
     let est_c = estado.clone();
     ui.on_crear_nota(move || {
         let n = obtener_nombre_semana_actual();
-        let p = vec![
-            format!("# Planificación / {}", n.replace(".md", "")),
-            "## Tareas".into(),
-            "- [ ] ".into(),
-        ];
+        let p = cargar_template(&n);
         guardar_archivo_fisico(&n, &p);
         let mut est = est_c.borrow_mut();
         est.archivo_activo = n.clone();
         est.lineas = p;
         est.linea_activa = 2;
+        est.historial.clear();
+        est.historial_pos = 0;
+        est.guardar_snapshot();
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_nota_activa(SharedString::from(&n));
             ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
             ui.set_puede_crear_nota(false);
-            modelo_nombres.insert(0, n.into());
+            modelo_nombres_crear.insert(
+                0,
+                EntradaNota {
+                    nombre: SharedString::from(&n),
+                    resumen: SharedString::from("0/1 tareas"),
+                },
+            );
         }
     });
 
+    let save_timer = Rc::new(RefCell::new(Timer::default()));
     let est_c = estado.clone();
+    let save_timer_c = save_timer.clone();
+    let refrescar_actualizar = refrescar_resumen.clone();
     ui.on_actualizar_linea(move |idx, txt| {
         let mut est = est_c.borrow_mut();
         if let Some(l) = est.lineas.get_mut(idx as usize) {
             *l = txt.to_string();
-            guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
         }
+        let archivo = est.archivo_activo.clone();
+        let lineas = est.lineas.clone();
+        drop(est);
+        let refrescar = refrescar_actualizar.clone();
+        save_timer_c.borrow_mut().start(
+            TimerMode::SingleShot,
+            Duration::from_millis(500),
+            move || {
+                guardar_archivo_fisico(&archivo, &lineas);
+                refrescar();
+            },
+        );
     });
 
     // Toggle de checklist desde modo lectura (CheckBox).
     let ui_handle = ui.as_weak();
     let est_c = estado.clone();
+    let modelo_nombres_toggle = modelo_nombres.clone();
+    let refrescar_toggle = refrescar_resumen.clone();
     ui.on_toggle_tarea(move |idx, marcada| {
         let mut est = est_c.borrow_mut();
         let i = idx as usize;
@@ -243,8 +480,42 @@ fn main() -> Result<(), slint::PlatformError> {
         };
 
         if nueva != actual {
+            est.guardar_snapshot();
             est.lineas[i] = nueva;
             guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
+            let archivo = est.archivo_activo.clone();
+            let (comp, total) = {
+                let comp = est
+                    .lineas
+                    .iter()
+                    .filter(|l| l.starts_with("- [x] ") || l.starts_with("- [X] "))
+                    .count() as u32;
+                let total = est
+                    .lineas
+                    .iter()
+                    .filter(|l| {
+                        l.starts_with("- [ ] ")
+                            || l.starts_with("- [x] ")
+                            || l.starts_with("- [X] ")
+                    })
+                    .count() as u32;
+                (comp, total)
+            };
+            if let Some(pos) = (0..modelo_nombres_toggle.row_count()).find(|&j| {
+                modelo_nombres_toggle
+                    .row_data(j)
+                    .map(|e| e.nombre.as_str().to_string())
+                    == Some(archivo.clone())
+            }) {
+                modelo_nombres_toggle.set_row_data(
+                    pos,
+                    EntradaNota {
+                        nombre: SharedString::from(&archivo),
+                        resumen: SharedString::from(format!("{}/{} tareas", comp, total)),
+                    },
+                );
+            }
+            refrescar_toggle();
             if let Some(ui) = ui_handle.upgrade() {
                 ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
             }
@@ -264,6 +535,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Enter: inserta una nueva línea debajo y mueve el foco.
     let ui_handle = ui.as_weak();
     let est_c = estado.clone();
+    let refrescar_insertar = refrescar_resumen.clone();
     ui.on_insertar_linea(move |idx, txt| {
         let mut est = est_c.borrow_mut();
         if est.archivo_activo.is_empty() {
@@ -275,21 +547,37 @@ fn main() -> Result<(), slint::PlatformError> {
             return;
         }
 
+        est.guardar_snapshot();
         est.lineas[i] = txt.to_string();
-        let nueva = match determinar_tipo(&est.lineas[i]).as_str() {
-            "tarea_pendiente" | "tarea_completada" => "- [ ] ".to_string(),
-            "vinieta" => {
-                if est.lineas[i].starts_with("* ") {
-                    "* ".to_string()
-                } else {
-                    "- ".to_string()
+        let tipo = determinar_tipo(&est.lineas[i]);
+        let es_prefijo_vacio = matches!(
+            (tipo.as_str(), est.lineas[i].as_str()),
+            ("tarea_pendiente", "- [ ] ")
+                | ("tarea_completada", "- [x] ")
+                | ("tarea_completada", "- [X] ")
+                | ("vinieta", "- ")
+                | ("vinieta", "* ")
+        );
+        if es_prefijo_vacio {
+            est.lineas[i] = String::new();
+            // linea_activa se mantiene en i: sale del modo lista
+        } else {
+            let nueva = match tipo.as_str() {
+                "tarea_pendiente" | "tarea_completada" => "- [ ] ".to_string(),
+                "vinieta" => {
+                    if est.lineas[i].starts_with("* ") {
+                        "* ".to_string()
+                    } else {
+                        "- ".to_string()
+                    }
                 }
-            }
-            _ => String::new(),
-        };
-        est.lineas.insert(i + 1, nueva);
-        est.linea_activa = i + 1;
+                _ => String::new(),
+            };
+            est.lineas.insert(i + 1, nueva);
+            est.linea_activa = i + 1;
+        }
         guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
+        refrescar_insertar();
 
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
@@ -329,17 +617,94 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let ui_handle = ui.as_weak();
     let est_c = estado.clone();
+    let refrescar_eliminar = refrescar_resumen.clone();
     ui.on_eliminar_linea(move |idx| {
         let mut est = est_c.borrow_mut();
         let i = idx as usize;
         if i == 0 || i >= est.lineas.len() {
             return;
         }
+        est.guardar_snapshot();
         est.lineas.remove(i);
         est.linea_activa = i - 1;
         guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
+        refrescar_eliminar();
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
+        }
+    });
+
+    let ui_handle = ui.as_weak();
+    let est_c = estado.clone();
+    let refrescar_undo = refrescar_resumen.clone();
+    ui.on_undo(move || {
+        let mut est = est_c.borrow_mut();
+        if est.undo() {
+            guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
+            refrescar_undo();
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
+            }
+        }
+    });
+
+    let ui_handle = ui.as_weak();
+    let est_c = estado.clone();
+    let refrescar_redo = refrescar_resumen.clone();
+    ui.on_redo(move || {
+        let mut est = est_c.borrow_mut();
+        if est.redo() {
+            guardar_archivo_fisico(&est.archivo_activo, &est.lineas);
+            refrescar_redo();
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_lineas_documento(ModelRc::from(reconstruir_modelo(&est)));
+            }
+        }
+    });
+
+    let est_c = estado.clone();
+    ui.on_exportar_nota(move || {
+        let est = est_c.borrow();
+        let contenido = est.lineas.join("\n");
+        drop(est);
+        if let Ok(mut cb) = Clipboard::new() {
+            cb.set_text(contenido).ok();
+        }
+    });
+
+    let ui_handle = ui.as_weak();
+    let est_c = estado.clone();
+    let modelo_nombres_del = modelo_nombres.clone();
+    let nombre_actual_del = nombre_actual.clone();
+    let refrescar_nota_del = refrescar_resumen.clone();
+    ui.on_eliminar_nota(move |nombre| {
+        if eliminar_archivo_fisico(nombre.as_str()) {
+            if let Some(pos) = (0..modelo_nombres_del.row_count())
+                .find(|&j| modelo_nombres_del.row_data(j).map(|e| e.nombre) == Some(nombre.clone()))
+            {
+                modelo_nombres_del.remove(pos);
+            }
+            let mut est = est_c.borrow_mut();
+            if est.archivo_activo == nombre.as_str() {
+                est.archivo_activo.clear();
+                est.lineas.clear();
+                est.historial.clear();
+                est.historial_pos = 0;
+            }
+            let lista_actualizada: Vec<String> = (0..modelo_nombres_del.row_count())
+                .filter_map(|j| modelo_nombres_del.row_data(j).map(|e| e.nombre.to_string()))
+                .collect();
+            let puede = puede_crear_semana_actual(&lista_actualizada, &nombre_actual_del);
+            if let Some(ui) = ui_handle.upgrade() {
+                if ui.get_nota_activa() == nombre {
+                    ui.set_nota_activa(SharedString::from(""));
+                    ui.set_lineas_documento(ModelRc::from(Rc::new(
+                        VecModel::<LineaNota>::default(),
+                    )));
+                }
+                ui.set_puede_crear_nota(puede);
+            }
+            refrescar_nota_del();
         }
     });
 
@@ -398,6 +763,8 @@ mod tests {
                 "- Texto con * asterisco".to_string(),
             ],
             linea_activa: 999,
+            historial: Vec::new(),
+            historial_pos: 0,
         };
         let modelo = reconstruir_modelo(&estado);
         assert_eq!(

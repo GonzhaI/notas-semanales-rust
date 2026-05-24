@@ -1,18 +1,18 @@
 import { TextEdit, Button, ListView, CheckBox } from "std-widgets.slint";
 
 export global AppTheme {
-    // Colores base
-    in property <color> bg: #1e1e1e;
-    in property <color> panel: #252526;
-    in property <color> hover: #37373d;
-    in property <color> text: #d4d4d4;
-    in property <color> text-muted: #9da3af;
-    in property <color> accent1: #569cd6;
-    in property <color> accent2: #4ec9b0;
-    in property <color> ok: #6a9955;
-    in property <color> border: #2d2d30;
+    in-out property <bool> claro: false;
 
-    // Tipografías (ligaduras dependen de la fuente instalada)
+    out property <color> bg:         claro ? #ffffff : #1e1e1e;
+    out property <color> panel:      claro ? #f3f3f3 : #252526;
+    out property <color> hover:      claro ? #e8e8e8 : #37373d;
+    out property <color> text:       claro ? #1e1e1e : #d4d4d4;
+    out property <color> text-muted: claro ? #6e6e6e : #9da3af;
+    out property <color> accent1:    claro ? #0070c1 : #569cd6;
+    out property <color> accent2:    claro ? #007d6e : #4ec9b0;
+    out property <color> ok:         claro ? #1a6d2a : #6a9955;
+    out property <color> border:     claro ? #d0d0d0 : #2d2d30;
+
     in property <string> font-ui: "Segoe UI Variable";
     in property <string> font-mono: "Cascadia Code";
 }
@@ -24,6 +24,11 @@ export struct LineaNota {
     tipo_bloque: string,
 }
 
+export struct EntradaNota {
+    nombre: string,
+    resumen: string,
+}
+
 export component AppWindow inherits Window {
     width: 1000px;
     height: 700px;
@@ -31,7 +36,7 @@ export component AppWindow inherits Window {
     background: AppTheme.bg;
     default-font-family: AppTheme.font-ui;
 
-    in property <[string]> lista-notas;
+    in property <[EntradaNota]> lista-notas;
     in property <bool> puede-crear-nota: false;
     in property <[LineaNota]> lineas-documento;
     in property <string> nota-activa: "";
@@ -44,6 +49,31 @@ export component AppWindow inherits Window {
     callback insertar-linea(int, string);
     callback mover-foco(int);
     callback eliminar-linea(int);
+    callback undo();
+    callback redo();
+    callback eliminar-nota(string);
+    callback exportar-nota();
+    callback buscar(string);
+
+    in-out property <bool> tema-claro: false;
+    in-out property <string> texto-busqueda: "";
+    in property <[string]> resumen-tareas;
+    in-out property <bool> vista-resumen: false;
+
+    forward-focus: atajo-global;
+    atajo-global := FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control && event.text == "z") {
+                root.undo();
+                accept
+            } else if (event.modifiers.control && event.text == "y") {
+                root.redo();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
 
     HorizontalLayout {
         // --- PANEL LATERAL IZQUIERDO ---
@@ -55,49 +85,160 @@ export component AppWindow inherits Window {
                 padding: 15px;
                 spacing: 15px;
 
-                Text {
-                    text: "Bóveda";
-                    font-size: 18px;
-                    color: AppTheme.text;
-                    font-weight: 700;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "Bóveda";
+                        font-size: 18px;
+                        color: AppTheme.text;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 6px;
+                        background: tema-btn.has-hover ? AppTheme.hover : transparent;
+                        tema-btn := TouchArea {
+                            clicked => { AppTheme.claro = !AppTheme.claro; }
+                        }
+                        // Sol: visible en modo oscuro (al hacer click pasa a claro)
+                        if !AppTheme.claro: Path {
+                            width: 16px;
+                            height: 16px;
+                            x: 8px;
+                            y: 8px;
+                            stroke: AppTheme.text-muted;
+                            stroke-width: 1.2px;
+                            fill: transparent;
+                            commands: "M 8 4.5 A 3.5 3.5 0 1 0 8 11.5 A 3.5 3.5 0 1 0 8 4.5 M 8 0 L 8 2 M 8 14 L 8 16 M 0 8 L 2 8 M 14 8 L 16 8 M 2.1 2.1 L 3.5 3.5 M 12.5 12.5 L 13.9 13.9 M 13.9 2.1 L 12.5 3.5 M 3.5 12.5 L 2.1 13.9";
+                        }
+                        // Luna: visible en modo claro (al hacer click pasa a oscuro)
+                        if AppTheme.claro: Path {
+                            width: 16px;
+                            height: 16px;
+                            x: 8px;
+                            y: 8px;
+                            stroke: AppTheme.text-muted;
+                            stroke-width: 1.2px;
+                            fill: transparent;
+                            commands: "M 14 8.53 A 6 6 0 1 1 7.47 2 A 4.67 4.67 0 0 0 14 8.53 Z";
+                        }
+                    }
                 }
 
-                Text {
-                    visible: root.nota-activa != "";
-                    text: "Seleccionada: " + root.nota-activa;
-                    font-size: 12px;
-                    color: AppTheme.text-muted;
-                    wrap: word-wrap;
+                Rectangle {
+                    height: 30px;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: AppTheme.border;
+                    background: AppTheme.bg;
+
+                    busqueda-input := TextInput {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        height: 100%;
+                        color: AppTheme.text;
+                        vertical-alignment: center;
+                        font-size: 13px;
+
+                        edited => {
+                            root.buscar(self.text);
+                        }
+                    }
+                    Text {
+                        visible: busqueda-input.text == "";
+                        text: "Buscar notas...";
+                        x: 8px;
+                        color: AppTheme.text-muted;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button {
+                        text: "+ Crear";
+                        height: 30px;
+                        enabled: root.puede-crear-nota;
+                        clicked => {
+                            root.crear-nota();
+                        }
+                    }
+                    Button {
+                        text: "Exportar";
+                        height: 30px;
+                        enabled: root.nota-activa != "" && !root.vista-resumen;
+                        clicked => {
+                            root.exportar-nota();
+                        }
+                    }
                 }
 
                 Button {
-                    text: "+ Crear Nota Actual";
-                    height: 35px;
-                    enabled: root.puede-crear-nota;
+                    text: root.vista-resumen ? "< Notas" : "Resumen >";
+                    height: 30px;
                     clicked => {
-                        root.crear-nota();
+                        root.vista-resumen = !root.vista-resumen;
                     }
                 }
 
                 ListView {
-                    for nota in lista-notas: Rectangle {
-                        height: 35px;
+                    for entrada in lista-notas: Rectangle {
+                        height: 48px;
                         border-radius: 5px;
-                        background: root.nota-activa == nota ? AppTheme.hover : (touch-nota.has-hover ? AppTheme.hover : transparent);
+                        background: root.nota-activa == entrada.nombre ? AppTheme.hover : (touch-nota.has-hover ? AppTheme.hover : transparent);
 
                         touch-nota := TouchArea {
                             clicked => {
-                                root.nota-seleccionada(nota);
+                                root.nota-seleccionada(entrada.nombre);
                             }
                         }
 
-                        Text {
-                            text: nota;
-                            color: AppTheme.text;
-                            vertical-alignment: center;
-                            x: 10px;
-                            font-size: 14px;
-                            font-family: AppTheme.font-mono;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 4px;
+                            alignment: space-between;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: entrada.nombre;
+                                    color: AppTheme.text;
+                                    font-size: 13px;
+                                    font-family: AppTheme.font-mono;
+                                }
+                                Text {
+                                    text: entrada.resumen;
+                                    color: AppTheme.text-muted;
+                                    font-size: 11px;
+                                }
+                            }
+
+                            if touch-nota.has-hover || root.nota-activa == entrada.nombre: Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 4px;
+                                background: btn-del.has-hover ? #c0392b : transparent;
+
+                                btn-del := TouchArea {
+                                    clicked => {
+                                        root.eliminar-nota(entrada.nombre);
+                                    }
+                                }
+                                Path {
+                                    width: 10px;
+                                    height: 10px;
+                                    x: 9px;
+                                    y: 9px;
+                                    stroke: btn-del.has-hover ? #ffffff : AppTheme.text-muted;
+                                    stroke-width: 1.5px;
+                                    fill: transparent;
+                                    commands: "M 1 1 L 9 9 M 9 1 L 1 9";
+                                }
+                            }
                         }
                     }
                 }
@@ -108,7 +249,53 @@ export component AppWindow inherits Window {
         Rectangle {
             background: AppTheme.bg;
 
-            if root.nota-activa == "": VerticalLayout {
+            if root.vista-resumen: VerticalLayout {
+                padding-left: 30px;
+                padding-right: 30px;
+                padding-top: 20px;
+                padding-bottom: 15px;
+                spacing: 12px;
+
+                Text {
+                    text: "Tareas pendientes";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: AppTheme.text;
+                }
+
+                Text {
+                    visible: resumen-tareas.length == 0;
+                    text: "Sin tareas pendientes en semanas anteriores.";
+                    font-size: 14px;
+                    color: AppTheme.text-muted;
+                }
+
+                ListView {
+                    for tarea in resumen-tareas: Rectangle {
+                        height: 30px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            Rectangle {
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: AppTheme.accent1;
+                                y: 12px;
+                            }
+                            Text {
+                                text: tarea;
+                                color: AppTheme.text;
+                                font-size: 14px;
+                                font-family: AppTheme.font-mono;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !root.vista-resumen && root.nota-activa == "": VerticalLayout {
                 alignment: center;
                 spacing: 10px;
                 padding: 40px;
@@ -128,14 +315,14 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if root.nota-activa != "": VerticalLayout {
+            if !root.vista-resumen && root.nota-activa != "": VerticalLayout {
                 padding-left: 30px;
                 padding-right: 30px;
                 padding-top: 15px;
                 padding-bottom: 15px;
                 ListView {
                     for linea[indice] in lineas-documento: Rectangle {
-                        height: linea.tipo_bloque == "titulo1" ? 45px : linea.tipo_bloque == "titulo2" ? 35px : 30px;
+                        height: linea.tipo_bloque == "titulo1" ? 45px : linea.tipo_bloque == "titulo2" ? 38px : linea.tipo_bloque == "titulo3" ? 33px : 30px;
 
                         // MODO EDICIÓN
                         if linea.es_activa: TextInput {
@@ -146,7 +333,7 @@ export component AppWindow inherits Window {
                             horizontal-alignment: left;
                             vertical-alignment: center;
                             font-family: AppTheme.font-mono;
-                            font-size: linea.tipo_bloque == "titulo1" ? 24px : linea.tipo_bloque == "titulo2" ? 20px : 16px;
+                            font-size: linea.tipo_bloque == "titulo1" ? 24px : linea.tipo_bloque == "titulo2" ? 20px : linea.tipo_bloque == "titulo3" ? 17px : 16px;
 
                             init => {
                                 self.focus();
@@ -199,6 +386,14 @@ export component AppWindow inherits Window {
                                     font-size: 20px;
                                     font-weight: 600;
                                     color: AppTheme.accent2;
+                                    vertical-alignment: center;
+                                }
+
+                                if linea.tipo_bloque == "titulo3": Text {
+                                    text: linea.texto_limpio;
+                                    font-size: 17px;
+                                    font-weight: 600;
+                                    color: AppTheme.text-muted;
                                     vertical-alignment: center;
                                 }
 
